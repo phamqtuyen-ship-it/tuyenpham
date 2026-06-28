@@ -1,0 +1,687 @@
+//@version=5
+indicator("1.5 BẮT ĐỈNH (Tích Hợp Sớm VIP + 6 Giờ + Auto Lot)", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)
+
+// ==========================================
+// === PHẦN 1: MÃ GỐC CỦA BẠN (GIỮ NGUYÊN 100%) ===
+// ==========================================
+// === INPUTS CŨ ===
+length = input.int(30, "Chu kỳ tính khối lượng")
+volume_method = input.string("EMA", title="Phương pháp volume", options=["EMA", "SMA", "EMA + SMA", "EMA hoặc SMA"])
+volume_multiplier = input.float(1.5, "Hệ số đột biến khối lượng")
+
+rsi_length = input.int(14, "Chu kỳ RSI")
+rsi_overbought = input.int(64, "RSI quá mua")
+rsi_oversold = input.int(36, "RSI quá bán")
+
+require_confirmation = input.bool(true, "Cần xác nhận nến sau đúng hướng?")
+show_raw_signals = input.bool(true, "Hiển thị tín hiệu sớm (chưa xác nhận)?")
+show_confirmed_signals = input.bool(true, "Hiển thị tín hiệu xác nhận?")
+
+use_medium_confirmation = input.bool(false, "Xác nhận nâng cấp: thân nến đủ lớn (Trung bình)?")
+use_strong_confirmation = input.bool(false, "Xác nhận nâng cấp: +volume hoặc RSI (Mạnh)?")
+min_body_ratio = input.float(0.3, "Tỷ lệ tối thiểu thân nến / ATR", step=0.05)
+
+// === INPUTS MỚI: MỞ RỘNG NẾN XÁC NHẬN ===
+use_extended_conf = input.bool(false, "Mở rộng số nến chờ xác nhận?", group="CÀI ĐẶT XÁC NHẬN MỞ RỘNG")
+max_wait_candles = input.int(3, ">> Số nến chờ tối đa", minval=1, group="CÀI ĐẶT XÁC NHẬN MỞ RỘNG")
+
+// === INPUTS: BỘ LỌC DELTA (CẬP NHẬT NGOẠI LỆ) ===
+use_delta_filter = input.bool(true, "Bật bộ lọc Delta cho nến xác nhận?", group="CÀI ĐẶT DELTA")
+delta_mode = input.string("Mức cố định", "Tùy chọn độ mạnh Delta", options=["Mức cố định", "Trung bình N nến"], group="CÀI ĐẶT DELTA")
+fixed_delta = input.float(50.0, "Mức Delta cố định (VD: 50)", group="CÀI ĐẶT DELTA")
+delta_ma_length = input.int(20, "Chu kỳ trung bình Delta (N nến)", group="CÀI ĐẶT DELTA")
+delta_multiplier = input.float(1.5, "Hệ số nhân với mức Trung bình", step=0.1, group="CÀI ĐẶT DELTA")
+
+use_delta_exception = input.bool(true, "Bật ngoại lệ Delta siêu lớn (Khi dùng Trung bình)?", group="CÀI ĐẶT DELTA")
+exception_delta = input.float(100.0, "Ngưỡng Delta ngoại lệ (VD: 100)", group="CÀI ĐẶT DELTA")
+
+// === INPUTS: BỘ LỌC ADX ===
+use_adx_filter = input.bool(true, "Bật bộ lọc ADX tối thiểu?", group="CÀI ĐẶT ADX")
+adx_length = input.int(14, "Chu kỳ DI", group="CÀI ĐẶT ADX")
+adx_smoothing = input.int(14, "Chu kỳ làm mượt ADX", group="CÀI ĐẶT ADX")
+adx_threshold = input.float(25.0, "Ngưỡng ADX tối thiểu (Thường dùng 20-25)", step=1.0, group="CÀI ĐẶT ADX")
+
+use_max_adx_filter = input.bool(false, "Bật chặn khi ADX quá cao?", group="CÀI ĐẶT ADX")
+max_adx_threshold = input.float(50.0, "Ngưỡng ADX tối đa (Không vào lệnh nếu ADX > mức này)", step=1.0, group="CÀI ĐẶT ADX")
+
+// ==========================================
+// === TÍNH NĂNG ĐƯỢC YÊU CẦU THÊM: 6 KHUNG GIỜ KHÓA ===
+// ==========================================
+grp_time_block = "KHÓA 6 KHUNG GIỜ (GIỜ VIỆT NAM)"
+use_time_block = input.bool(false, "⛔ BẬT TÍNH NĂNG CHẶN GIỜ TỔNG", group=grp_time_block)
+use_t1 = input.bool(true, "Khóa khung 1:", group=grp_time_block, inline="t1")
+time_1 = input.session("0600-0800", "", group=grp_time_block, inline="t1")
+use_t2 = input.bool(true, "Khóa khung 2:", group=grp_time_block, inline="t2")
+time_2 = input.session("1700-1800", "", group=grp_time_block, inline="t2")
+use_t3 = input.bool(false, "Khóa khung 3:", group=grp_time_block, inline="t3")
+time_3 = input.session("2330-2359", "", group=grp_time_block, inline="t3")
+use_t4 = input.bool(false, "Khóa khung 4:", group=grp_time_block, inline="t4")
+time_4 = input.session("0000-0100", "", group=grp_time_block, inline="t4")
+use_t5 = input.bool(false, "Khóa khung 5:", group=grp_time_block, inline="t5")
+time_5 = input.session("0200-0400", "", group=grp_time_block, inline="t5")
+use_t6 = input.bool(false, "Khóa khung 6:", group=grp_time_block, inline="t6")
+time_6 = input.session("0400-0500", "", group=grp_time_block, inline="t6")
+
+// Lọc 6 Khung Giờ (Chuẩn time "1" chống mù dữ liệu)
+bool in_t1 = use_t1 and not na(time("1", time_1, "Asia/Ho_Chi_Minh"))
+bool in_t2 = use_t2 and not na(time("1", time_2, "Asia/Ho_Chi_Minh"))
+bool in_t3 = use_t3 and not na(time("1", time_3, "Asia/Ho_Chi_Minh"))
+bool in_t4 = use_t4 and not na(time("1", time_4, "Asia/Ho_Chi_Minh"))
+bool in_t5 = use_t5 and not na(time("1", time_5, "Asia/Ho_Chi_Minh"))
+bool in_t6 = use_t6 and not na(time("1", time_6, "Asia/Ho_Chi_Minh"))
+bool is_time_allowed = not use_time_block or not (in_t1 or in_t2 or in_t3 or in_t4 or in_t5 or in_t6)
+
+// === VOLUME CALCULATION ===
+avg_volume_ema = ta.ema(volume, length)
+avg_volume_sma = ta.sma(volume, length)
+
+spike_ema = volume > avg_volume_ema * volume_multiplier or volume[1] > avg_volume_ema * volume_multiplier or volume[2] > avg_volume_ema * volume_multiplier
+spike_sma = volume > avg_volume_sma * volume_multiplier or volume[1] > avg_volume_sma * volume_multiplier or volume[2] > avg_volume_sma * volume_multiplier
+
+volume_spike = switch volume_method
+    "EMA" => spike_ema
+    "SMA" => spike_sma
+    "EMA + SMA" => spike_ema and spike_sma
+    "EMA hoặc SMA" => spike_ema or spike_sma
+
+// === RSI ===
+rsi = ta.rsi(close, rsi_length)
+bullish_rsi = rsi < rsi_oversold or rsi[1] < rsi_oversold or rsi[2] < rsi_oversold
+bearish_rsi = rsi > rsi_overbought or rsi[1] > rsi_overbought or rsi[2] > rsi_overbought
+
+// === CANDLE PATTERNS ===
+bullish_engulfing = close > open and close[1] < open[1] and open < close[1] and close > open[1]
+bearish_engulfing = close < open and close[1] > open[1] and open > close[1] and close < open[1]
+piercing_pattern = close > open and close[1] < open[1] and open < close[1] and close > open[1] and close < open[1] + (close[1] - open[1]) / 2
+is_evening_star = close[2] > open[2] and close[1] > open[1] and close < open and open < close[1] and close < (open[2] + close[2]) / 2
+is_morning_star = close[2] < open[2] and close[1] < open[1] and close > open and open > close[1] and close > (open[2] + close[2]) / 2
+bullish_harami = close > open and close[1] < open[1] and close < open[1] and open > close[1]
+bearish_harami = close < open and close[1] > open[1] and close > open[1] and open < close[1]
+tweezer_top = high == high[1] and close < open and close[1] > open[1]
+bullish_abandoned_baby = close[2] < open[2] and open[1] == close[1] and close > open
+
+// ==========================================
+// === TÍNH NĂNG CHẶN BÙNG NỔ KHỐI LƯỢNG QUÁ MỨC ===
+// ==========================================
+grp_vol_block = "CHẶN KHI BÙNG NỔ KHỐI LƯỢNG QUÁ LỚN"
+use_vol_block = input.bool(false, "Bật chặn khi Volume bùng nổ quá mức?", group=grp_vol_block)
+vol_block_lookback = input.int(5, ">> Xét trong N nến gần nhất", minval=1, group=grp_vol_block)
+vol_block_length = input.int(100, ">> Chu kỳ Volume trung bình dài hạn", minval=10, group=grp_vol_block)
+vol_block_mult = input.float(3.0, ">> Hệ số chặn (Gấp X lần trung bình)", step=0.1, group=grp_vol_block)
+
+long_avg_vol = ta.sma(volume, vol_block_length)
+is_vol_exploded = volume > long_avg_vol * vol_block_mult
+has_recent_explosion = math.sum(is_vol_exploded ? 1 : 0, vol_block_lookback) > 0
+vol_block_ok = not (use_vol_block and has_recent_explosion)
+
+// ==========================================
+// === TÍNH NĂNG MỚI: CHẶN KHI CẠN KIỆT KHỐI LƯỢNG ===
+// ==========================================
+grp_low_vol = "CHẶN KHI KHỐI LƯỢNG QUÁ THẤP"
+use_low_vol = input.bool(false, "Bật chặn khi Volume quá thấp (Cạn kiệt)?", group=grp_low_vol)
+low_vol_lookback = input.int(5, ">> Xét trong N nến gần nhất", minval=1, group=grp_low_vol)
+low_vol_length = input.int(100, ">> Chu kỳ Volume trung bình dài hạn", minval=10, group=grp_low_vol)
+low_vol_mult = input.float(0.5, ">> Hệ số chặn (VD: 0.5 = dưới 50% mức TB)", step=0.1, group=grp_low_vol)
+
+long_avg_vol_low = ta.sma(volume, low_vol_length)
+is_vol_too_low = volume < long_avg_vol_low * low_vol_mult
+has_recent_low_vol = math.sum(is_vol_too_low ? 1 : 0, low_vol_lookback) > 0
+low_vol_ok = not (use_low_vol and has_recent_low_vol)
+
+// === RAW SIGNALS ===
+raw_bullish_signal = (bullish_engulfing or piercing_pattern or is_morning_star or bullish_harami or bullish_abandoned_baby) and volume_spike and bullish_rsi and vol_block_ok and low_vol_ok
+raw_bearish_signal = (bearish_engulfing or is_evening_star or bearish_harami or tweezer_top) and volume_spike and bearish_rsi and vol_block_ok and low_vol_ok
+
+// === CONFIRMATION LOGIC ===
+body_size = math.abs(close - open)
+atr_val = ta.atr(14)
+body_large_enough = body_size > atr_val * min_body_ratio
+volume_high = volume > ta.sma(volume, 20)
+rsi_rising = rsi > rsi[1]
+confirm_strength_extra = volume_high or rsi_rising
+
+use_basic = not use_medium_confirmation and not use_strong_confirmation
+use_medium = use_medium_confirmation and not use_strong_confirmation and body_large_enough
+use_strong = use_strong_confirmation and body_large_enough and confirm_strength_extra
+
+// --- LOGIC TÌM NẾN XÁC NHẬN TRONG N NẾN ---
+curr_bull_cond = close > open and (use_basic or use_medium or use_strong)
+curr_bear_cond = close < open and (use_basic or use_medium or use_strong)
+
+var int last_raw_bull = na
+var int last_raw_bear = na
+var bool bull_conf_fired = false
+var bool bear_conf_fired = false
+
+if raw_bullish_signal
+    last_raw_bull := bar_index
+    bull_conf_fired := false
+if raw_bearish_signal
+    last_raw_bear := bar_index
+    bear_conf_fired := false
+
+bars_since_bull = bar_index - last_raw_bull
+bars_since_bear = bar_index - last_raw_bear
+
+is_bull_window = use_extended_conf ? (not na(bars_since_bull) and bars_since_bull >= 1 and bars_since_bull <= max_wait_candles) : (not na(bars_since_bull) and bars_since_bull == 1)
+is_bear_window = use_extended_conf ? (not na(bars_since_bear) and bars_since_bear >= 1 and bars_since_bear <= max_wait_candles) : (not na(bars_since_bear) and bars_since_bear == 1)
+
+bullish_confirmed = is_bull_window and curr_bull_cond
+bearish_confirmed = is_bear_window and curr_bear_cond
+
+// ==========================================
+// === TÍNH TOÁN & LỌC DELTA (CHO NẾN XÁC NHẬN) ===
+// ==========================================
+tw = high - low
+buy_vol = tw == 0 ? 0 : volume * ((close - low) / tw)
+sell_vol = tw == 0 ? 0 : volume * ((high - close) / tw)
+delta = buy_vol - sell_vol
+
+avg_delta_magnitude = ta.sma(math.abs(delta), delta_ma_length)
+
+bullish_delta_ok = false
+bearish_delta_ok = false
+
+if delta_mode == "Mức cố định"
+    bullish_delta_ok := (delta >= fixed_delta) or (delta[1] >= fixed_delta)
+    bearish_delta_ok := (delta <= -fixed_delta) or (delta[1] <= -fixed_delta)
+else if delta_mode == "Trung bình N nến"
+    bullish_avg = (delta >= avg_delta_magnitude * delta_multiplier) or (delta[1] >= avg_delta_magnitude * delta_multiplier)
+    bearish_avg = (delta <= -avg_delta_magnitude * delta_multiplier) or (delta[1] <= -avg_delta_magnitude * delta_multiplier)
+    
+    bullish_exc = use_delta_exception and ((delta >= exception_delta) or (delta[1] >= exception_delta))
+    bearish_exc = use_delta_exception and ((delta <= -exception_delta) or (delta[1] <= -exception_delta))
+    
+    bullish_delta_ok := bullish_avg or bullish_exc
+    bearish_delta_ok := bearish_avg or bearish_exc
+
+// ==========================================
+// === TÍNH TOÁN & LỌC ADX ===
+// ==========================================
+[diplus, diminus, adx_value] = ta.dmi(adx_length, adx_smoothing)
+min_adx_ok = not use_adx_filter or (adx_value >= adx_threshold)
+max_adx_ok = not use_max_adx_filter or (adx_value <= max_adx_threshold) // Chặn khi ADX quá lớn
+adx_ok = min_adx_ok and max_adx_ok // Đạt cả điều kiện tối thiểu và tối đa
+
+// ==============================================================
+// 🔥 FIX LỖI: CHỈ CHẶN KHI XÁC NHẬN BỊ TỤT SÂU NGƯỢC HƯỚNG 🔥
+// Đã được bê y nguyên từ mã "bắt đỉnh 3.txt"
+// ==============================================================
+grp_dist = "KHOẢNG CÁCH TỐI ĐA (SỚM -> XÁC NHẬN)"
+use_max_dist = input.bool(false, "Bật chặn khi Xác nhận TỤT QUÁ SÂU?", group=grp_dist)
+max_dist_price = input.float(2.0, ">> Độ tụt ngược hướng tối đa (VD: 2.0 giá)", step=0.1, group=grp_dist)
+
+var float price_early_bull = na
+var float price_early_bear = na
+
+// Ghi nhớ lại giá lúc đóng cửa của nến Sớm
+if raw_bullish_signal
+    price_early_bull := close
+if raw_bearish_signal
+    price_early_bear := close
+
+// Chỉ chặn khi nó tụt xuống (đối với Buy) hoặc vọt lên (đối với Sell)
+dist_bull_ok = not use_max_dist or ((price_early_bull - close) <= max_dist_price)
+dist_bear_ok = not use_max_dist or ((close - price_early_bear) <= max_dist_price)
+
+// ==========================================
+// === KẾT HỢP TẤT CẢ TÍN HIỆU XÁC NHẬN ===
+// ==========================================
+temp_bull_conf = bullish_confirmed and (not use_delta_filter or bullish_delta_ok) and adx_ok and dist_bull_ok
+temp_bear_conf = bearish_confirmed and (not use_delta_filter or bearish_delta_ok) and adx_ok and dist_bear_ok
+
+bool final_bullish_confirmed = false
+if temp_bull_conf and not bull_conf_fired
+    final_bullish_confirmed := true
+    bull_conf_fired := true
+
+bool final_bearish_confirmed = false
+if temp_bear_conf and not bear_conf_fired
+    final_bearish_confirmed := true
+    bear_conf_fired := true
+
+
+// ==============================================================
+// 🔥 TÍNH NĂNG MỚI: ĐÁNH NẾN SỚM VIP (ĐỘC LẬP & TẮT MỞ ĐƯỢC) 🔥
+// ==============================================================
+grp_early = "ĐÁNH NẾN SỚM ĐỘT BIẾN (KHÔNG CHỜ XÁC NHẬN)"
+use_early = input.bool(false, "🚀 Bật Đánh Nến Sớm VIP?", group=grp_early)
+early_body_ratio = input.float(1.5, ">> Thân nến Sớm phải lớn hơn ATR x (Lần)", step=0.1, group=grp_early)
+early_close_pct = input.float(20.0, ">> % Râu nến cản tối đa (Thấp = Đóng cửa càng dứt khoát)", maxval=50.0, group=grp_early)
+
+grp_early_delta = "BỘ LỌC DELTA (RIÊNG CHO NẾN SỚM VIP)"
+use_early_delta = input.bool(true, "Bật bộ lọc Delta KHẮT KHE cho Nến Sớm?", group=grp_early_delta)
+early_delta_mode = input.string("Trung bình N nến", "Cách lọc Delta", options=["Mức cố định", "Trung bình N nến"], group=grp_early_delta)
+early_fixed_delta = input.float(100.0, "Mức Delta cố định (Sớm)", group=grp_early_delta)
+early_delta_len = input.int(20, "Chu kỳ trung bình Delta (Sớm)", group=grp_early_delta)
+early_delta_mult = input.float(2.0, "Hệ số nhân (Nên để khắt khe, VD: 2.0)", step=0.1, group=grp_early_delta)
+
+early_is_big_body = body_size > (atr_val * early_body_ratio)
+early_bull_close_ok = tw == 0 ? false : (high - close) <= (tw * (early_close_pct / 100.0))
+early_bear_close_ok = tw == 0 ? false : (close - low) <= (tw * (early_close_pct / 100.0))
+
+early_avg_delta = ta.sma(math.abs(delta), early_delta_len)
+early_bull_delta_ok = false
+early_bear_delta_ok = false
+
+if early_delta_mode == "Mức cố định"
+    early_bull_delta_ok := delta >= early_fixed_delta
+    early_bear_delta_ok := delta <= -early_fixed_delta
+else
+    early_bull_delta_ok := delta >= (early_avg_delta * early_delta_mult)
+    early_bear_delta_ok := delta <= -(early_avg_delta * early_delta_mult)
+
+early_bullish_trigger = use_early and raw_bullish_signal and early_is_big_body and early_bull_close_ok and (not use_early_delta or early_bull_delta_ok) and adx_ok
+early_bearish_trigger = use_early and raw_bearish_signal and early_is_big_body and early_bear_close_ok and (not use_early_delta or early_bear_delta_ok) and adx_ok
+
+
+// === PLOT SHAPES ===
+plotshape(show_raw_signals and raw_bullish_signal and not early_bullish_trigger, title="Tín hiệu sớm mua", location=location.belowbar, color=color.new(color.green, 0), style=shape.triangleup, size=size.tiny, text="Sớm ↑")
+plotshape(show_raw_signals and raw_bearish_signal and not early_bearish_trigger, title="Tín hiệu sớm bán", location=location.abovebar, color=color.new(color.red, 0), style=shape.triangledown, size=size.tiny, text="Sớm ↓")
+
+plotshape(show_confirmed_signals and final_bullish_confirmed, title="Tín hiệu mua (Xác nhận toàn diện)", location=location.belowbar, color=color.green, style=shape.labelup, size=size.small, text="XÁC ↑")
+plotshape(show_confirmed_signals and final_bearish_confirmed, title="Tín hiệu bán (Xác nhận toàn diện)", location=location.abovebar, color=color.red, style=shape.labeldown, size=size.small, text="XÁC ↓")
+
+plotshape(early_bullish_trigger, title="Đột biến Mua VIP", location=location.belowbar, color=color.fuchsia, style=shape.labelup, size=size.small, text="SỚM VIP ↑", textcolor=color.white)
+plotshape(early_bearish_trigger, title="Đột biến Bán VIP", location=location.abovebar, color=color.fuchsia, style=shape.labeldown, size=size.small, text="SỚM VIP ↓", textcolor=color.white)
+
+// === ALERTS GỐC CỦA BẠN ===
+alertcondition(final_bullish_confirmed, title="Tín hiệu mua xác nhận", message="Tín hiệu MUA đã xác nhận")
+alertcondition(final_bearish_confirmed, title="Tín hiệu bán xác nhận", message="Tín hiệu BÁN đã xác nhận")
+
+
+// ==========================================
+// === PHẦN 2: MODULE QUẢN LÝ LỆNH (TRADE MANAGEMENT) ===
+// ==========================================
+grp_risk = "QUẢN TRỊ RỦI RO & ĐIỂM VÀO"
+use_limit     = input.bool(false, "🛡️ Dùng Lệnh Chờ Hồi (Limit)?", group=grp_risk)
+limit_pct     = input.float(30.0, ">> % Hồi lại từ thân nến", minval=0.0, maxval=99.0, step=10.0, group=grp_risk)
+limit_exp     = input.int(3, ">> Hủy lệnh chờ sau (Nến)", group=grp_risk)
+
+grp_far_sl = "QUẢN LÝ KHI SL QUÁ XA"
+use_dynamic_rr = input.bool(false, "1️⃣ Tự động giảm R:R khi SL quá xa?", group=grp_far_sl)
+dynamic_rr_threshold = input.float(12.0, ">> Ngưỡng SL xa (Số giá)", step=0.5, group=grp_far_sl)
+dynamic_rr_ratio = input.float(0.6, ">> Áp dụng tỷ lệ R:R mới (VD: 0.6)", step=0.1, group=grp_far_sl)
+
+use_skip_far_sl = input.bool(false, "2️⃣ Bỏ qua KHÔNG VÀO LỆNH nếu SL quá xa?", group=grp_far_sl)
+skip_sl_threshold = input.float(15.0, ">> Ngưỡng SL tối đa để HỦY LỆNH", step=0.5, group=grp_far_sl)
+
+grp_cooldown = "⏳ KHÓA LỆNH (SAU KHI THUA / HỤT LIMIT)"
+use_cooldown     = input.bool(true, "Bật tính năng Khóa hướng giao dịch?", group=grp_cooldown)
+cooldown_minutes = input.int(15, ">> Thời gian khóa (Phút)", minval=1, group=grp_cooldown)
+
+var float block_long_until = 0.0
+var float block_short_until = 0.0
+
+atr_len_sl    = input.int(14, "Chu kỳ ATR (Cho SL)", group=grp_risk)
+sl_method     = input.string("ATR", "Cách tính Cắt Lỗ (SL)", options=["ATR", "Đỉnh/Đáy Cũ (Swing)"], group=grp_risk)
+atr_mult      = input.float(1.5, ">> Hệ số ATR (Nếu chọn ATR)", step=0.1, group=grp_risk)
+swing_lookback= input.int(10, ">> Số nến dò Đỉnh/Đáy (Nếu chọn Swing)", group=grp_risk)
+sl_padding    = input.float(0.0, ">> Đệm thêm SL (Points)", step=0.5, group=grp_risk)
+max_initial_sl= input.float(0.0, "⛔ CỐ ĐỊNH SL TỐI ĐA (0=Tắt)", step=1.0, group=grp_risk) 
+rr_ratio      = input.float(1.5, "Tỷ lệ Lợi nhuận/Rủi ro (R:R)", step=0.1, group=grp_risk)
+
+grp_hard_tp = "CHỐT LỜI TỐI ĐA (CHẶN TRẦN LỢI NHUẬN)"
+use_max_tp    = input.bool(false, "🛑 Dừng mọi thứ và Chốt Lời khi đạt (Giá)?", group=grp_hard_tp)
+max_tp_price  = input.float(30.0, ">> Mức lợi nhuận trần (VD: 30 giá)", step=1.0, group=grp_hard_tp)
+
+grp_be_trail = "QUẢN LÝ LỆNH ĐỘNG (BE & TRAIL)"
+use_be        = input.bool(false, "🔥 Kích hoạt Dời Hòa (Breakeven)?", group=grp_be_trail)
+be_trigger    = input.float(1.0, ">> Tỷ lệ R:R kích hoạt Dời Hòa", step=0.1, group=grp_be_trail)
+use_trail     = input.bool(false, "🚀 Kích hoạt Trailing Stop?", group=grp_be_trail)
+trail_ignore_tp= input.bool(true, ">> Thả rông TP (Không chốt non R:R)?", group=grp_be_trail)
+trail_trigger = input.float(1.5, ">> Bắt đầu Trail khi đạt R:R", step=0.1, group=grp_be_trail)
+trail_dist    = input.float(1.0, ">> Khoảng cách Trail (x ATR)", step=0.1, group=grp_be_trail)
+max_trail_dist= input.float(0.0, "⛔ Max khoảng cách Trailing (0=Tắt)", step=1.0, group=grp_be_trail)
+use_step_trail= input.bool(false, "Khóa Bậc thang (Step-Lock)?", group=grp_be_trail)
+trail_step_pts= input.float(5.0, ">> Kích thước bậc thang (Points)", step=1.0, group=grp_be_trail)
+
+// ==========================================
+// === TÍNH NĂNG ĐƯỢC YÊU CẦU THÊM: QUẢN LÝ AUTO LOT (SỐ TIỀN) ===
+// ==========================================
+grp_auto_vol = "CÀI ĐẶT KHỐI LƯỢNG (AUTO LOT)"
+use_auto_vol = input.bool(false, "🌟 Bật Volume Động (Theo Rủi ro $)?", group=grp_auto_vol)
+max_risk_usd = input.float(15.0, ">> Số tiền rủi ro tối đa (VD: 15$)", step=1.0, group=grp_auto_vol)
+gold_point_val = input.float(100.0, ">> Giá trị 1 Lot/Giá (Vàng = 100$)", group=grp_auto_vol)
+
+// Helper tính Pips
+get_pip_size() =>
+    syminfo.type == "crypto" or syminfo.type == "cfd" or syminfo.type == "index" ? syminfo.mintick : syminfo.mintick * 10
+pip_sz = get_pip_size()
+
+// Biến trạng thái quản lý lệnh
+var int trade_dir = 0
+var float entry_price = na
+var float sl_price = na
+var float tp_price = na
+var float fixed_sl = na
+var bool is_be = false
+var bool is_trailing = false
+var int trade_start_bar = na 
+var float highest_price = na 
+var float lowest_price = na  
+
+var int pending_dir = 0
+var float pending_entry = na
+var float pending_sl = na
+var float pending_tp = na
+var int pending_expire = 0
+
+// Thống kê
+var int total_trades = 0
+var int win_trades = 0
+var int loss_trades = 0
+var int be_trades = 0
+var float total_pips_win = 0.0
+var float total_pips_loss = 0.0
+
+// Tracking Khối lượng Lot
+var float active_trade_vol = na
+var float pending_trade_vol = na
+
+float atr_sl_val = ta.atr(atr_len_sl)
+float swing_low = ta.lowest(low, swing_lookback)
+float swing_high = ta.highest(high, swing_lookback)
+
+// --- A. XỬ LÝ LỆNH CHỜ (PENDING LIMIT) ---
+if pending_dir != 0
+    is_filled = false
+    if pending_dir == 1 and low <= pending_entry
+        trade_dir := 1, entry_price := pending_entry, sl_price := pending_sl, tp_price := pending_tp, fixed_sl := pending_sl
+        highest_price := pending_entry, lowest_price := pending_entry
+        is_filled := true
+    else if pending_dir == -1 and high >= pending_entry
+        trade_dir := -1, entry_price := pending_entry, sl_price := pending_sl, tp_price := pending_tp, fixed_sl := pending_sl
+        highest_price := pending_entry, lowest_price := pending_entry
+        is_filled := true
+        
+    if is_filled
+        active_trade_vol := pending_trade_vol // Lưu lại Lot vào lệnh thực tế
+        is_be := false, is_trailing := false
+        trade_start_bar := bar_index
+        pending_dir := 0
+        total_trades += 1
+    else if bar_index > pending_expire
+        if use_cooldown
+            if pending_dir == 1
+                block_long_until := time + (cooldown_minutes * 60000)
+            else if pending_dir == -1
+                block_short_until := time + (cooldown_minutes * 60000)
+        pending_dir := 0 
+
+// --- B. VÀO LỆNH MỚI (CÓ LỌC GIỜ is_time_allowed) ---
+trigger_buy = (final_bullish_confirmed or early_bullish_trigger) and barstate.isconfirmed and (not use_cooldown or time > block_long_until) and is_time_allowed
+trigger_sell = (final_bearish_confirmed or early_bearish_trigger) and barstate.isconfirmed and (not use_cooldown or time > block_short_until) and is_time_allowed
+
+if trade_dir == 0 and pending_dir == 0
+    if trigger_buy or trigger_sell
+        is_buy = trigger_buy
+        
+        float calc_entry = close
+        if use_limit
+            calc_entry := is_buy ? close - (math.abs(high-low) * (limit_pct/100.0)) : close + (math.abs(high-low) * (limit_pct/100.0))
+            
+        float raw_sl = na
+        if sl_method == "Đỉnh/Đáy Cũ (Swing)"
+            float min_dist = atr_sl_val * 0.5 
+            raw_sl := is_buy ? math.min(swing_low, calc_entry - min_dist) - sl_padding : math.max(swing_high, calc_entry + min_dist) + sl_padding
+        else
+            raw_sl := is_buy ? calc_entry - (atr_sl_val * atr_mult) - sl_padding : calc_entry + (atr_sl_val * atr_mult) + sl_padding
+            
+        float risk_dist = math.abs(calc_entry - raw_sl)
+        if max_initial_sl > 0 and risk_dist > max_initial_sl
+            raw_sl := is_buy ? calc_entry - max_initial_sl : calc_entry + max_initial_sl
+            risk_dist := math.abs(calc_entry - raw_sl)
+
+        // ===============================================
+        // 🔥 TÍNH TOÁN KHỐI LƯỢNG LOT (AUTO HOẶC CỐ ĐỊNH) 🔥
+        // ===============================================
+        float bot_vol_input = input.float(0.01, "Khối lượng [CỐ ĐỊNH] (Lot)", step=0.01, group="CÀI ĐẶT BOT TỰ ĐỘNG (EXNESS)")
+        float calc_vol = bot_vol_input
+        if use_auto_vol and risk_dist > 0
+            calc_vol := math.floor((max_risk_usd / (risk_dist * gold_point_val)) * 100) / 100
+            calc_vol := math.max(calc_vol, 0.01)
+
+        bool skip_this_trade = use_skip_far_sl and (risk_dist > skip_sl_threshold)
+        
+        if not skip_this_trade
+            float calc_tp = na
+            float tp_rr = na
+            float tp_max_val = na
+
+            if not (use_trail and trail_ignore_tp)
+                tp_rr := is_buy ? calc_entry + math.abs(calc_entry - raw_sl) * rr_ratio : calc_entry - math.abs(calc_entry - raw_sl) * rr_ratio
+                
+                if use_dynamic_rr and risk_dist > dynamic_rr_threshold
+                    tp_rr := is_buy ? calc_entry + risk_dist * dynamic_rr_ratio : calc_entry - risk_dist * dynamic_rr_ratio
+
+            if use_max_tp
+                tp_max_val := is_buy ? calc_entry + max_tp_price : calc_entry - max_tp_price
+
+            if not na(tp_rr) and not na(tp_max_val)
+                calc_tp := is_buy ? math.min(tp_rr, tp_max_val) : math.max(tp_rr, tp_max_val)
+            else if not na(tp_rr)
+                calc_tp := tp_rr
+            else if not na(tp_max_val)
+                calc_tp := tp_max_val
+                
+            if use_limit
+                pending_trade_vol := calc_vol // Lưu tạm Lot chờ
+                pending_dir := is_buy ? 1 : -1
+                pending_entry := calc_entry
+                pending_sl := raw_sl
+                pending_tp := calc_tp
+                pending_expire := bar_index + limit_exp
+                if barstate.islast
+                    line.new(bar_index, calc_entry, bar_index+1, calc_entry, color=color.blue, style=line.style_dotted)
+            else
+                active_trade_vol := calc_vol  // Lưu Lot trực tiếp vào lệnh
+                trade_dir := is_buy ? 1 : -1
+                entry_price := calc_entry
+                sl_price := raw_sl
+                fixed_sl := raw_sl
+                tp_price := calc_tp
+                highest_price := calc_entry
+                lowest_price := calc_entry
+                is_be := false
+                is_trailing := false
+                trade_start_bar := bar_index
+                total_trades += 1
+
+// --- C. DỜI HÒA & TRAILING STOP ---
+if trade_dir != 0
+    float standard_risk = math.abs(entry_price - fixed_sl)
+    highest_price := math.max(nz(highest_price, high), high)
+    lowest_price := math.min(nz(lowest_price, low), low)
+
+    if use_be and not is_trailing
+        if trade_dir == 1 and high >= entry_price + (standard_risk * be_trigger)
+            if sl_price < entry_price
+                sl_price := entry_price, is_be := true
+        else if trade_dir == -1 and low <= entry_price - (standard_risk * be_trigger)
+            if sl_price > entry_price
+                sl_price := entry_price, is_be := true
+
+    if use_trail
+        float trail_step_dist = atr_sl_val * trail_dist
+        if trade_dir == 1 and high >= entry_price + (standard_risk * trail_trigger)
+            float raw_new_sl = high - trail_step_dist
+            if max_trail_dist > 0 and (highest_price - raw_new_sl) > max_trail_dist
+                raw_new_sl := highest_price - max_trail_dist
+
+            float final_new_sl = raw_new_sl
+            if use_step_trail
+                if raw_new_sl - sl_price >= trail_step_pts
+                    final_new_sl := sl_price + math.floor((raw_new_sl - sl_price) / trail_step_pts) * trail_step_pts
+                else
+                    final_new_sl := sl_price
+            
+            if final_new_sl > sl_price
+                sl_price := final_new_sl, is_trailing := true
+
+        else if trade_dir == -1 and low <= entry_price - (standard_risk * trail_trigger)
+            float raw_new_sl = low + trail_step_dist
+            if max_trail_dist > 0 and (raw_new_sl - lowest_price) > max_trail_dist
+                raw_new_sl := lowest_price + max_trail_dist
+
+            float final_new_sl = raw_new_sl
+            if use_step_trail
+                if sl_price - raw_new_sl >= trail_step_pts
+                    final_new_sl := sl_price - math.floor((sl_price - raw_new_sl) / trail_step_pts) * trail_step_pts
+                else
+                    final_new_sl := sl_price
+                    
+            if final_new_sl < sl_price
+                sl_price := final_new_sl, is_trailing := true
+
+// --- D. ĐÓNG LỆNH & VẼ THỐNG KÊ LÊN CHART ---
+float exit_price = na
+bool is_hit = false
+bool is_win_trade = false
+
+if trade_dir == 1
+    if low <= sl_price
+        exit_price := sl_price
+        is_hit := true
+        is_win_trade := is_trailing and sl_price > entry_price
+    else if not na(tp_price) and high >= tp_price
+        exit_price := tp_price
+        is_hit := true
+        is_win_trade := true
+        
+else if trade_dir == -1
+    if high >= sl_price
+        exit_price := sl_price
+        is_hit := true
+        is_win_trade := is_trailing and sl_price < entry_price
+    else if not na(tp_price) and low <= tp_price
+        exit_price := tp_price
+        is_hit := true
+        is_win_trade := true
+
+string close_action_str = trade_dir == 1 ? "close_long" : "close_short"
+
+if is_hit
+    float pips_gained = (trade_dir == 1 ? (exit_price - entry_price) : (entry_price - exit_price)) / pip_sz
+    bool is_be_trade = is_be and math.abs(exit_price - entry_price) <= syminfo.mintick * 5 and not is_win_trade
+    
+    if not is_win_trade and not is_be_trade and use_cooldown
+        if trade_dir == 1
+            block_long_until := time + (cooldown_minutes * 60000)
+        else if trade_dir == -1
+            block_short_until := time + (cooldown_minutes * 60000)
+
+    if is_win_trade
+        win_trades += 1
+        total_pips_win += pips_gained
+    else if is_be_trade
+        be_trades += 1
+    else
+        loss_trades += 1
+        total_pips_loss += math.abs(pips_gained)
+        
+    color c = is_win_trade ? (is_trailing ? color.blue : color.green) : (is_be_trade ? color.gray : color.red)
+    string txt = ""
+    if is_win_trade
+        if not na(tp_price) and exit_price == tp_price
+            txt := "TP (+" + str.tostring(math.round(pips_gained)) + " p)"
+        else if is_trailing
+            txt := "TRAIL (+" + str.tostring(math.round(pips_gained)) + " p)"
+        else
+            txt := "WIN (+" + str.tostring(math.round(pips_gained)) + " p)"
+    else if is_be_trade
+        txt := "HÒA"
+    else
+        txt := "LOSS (" + str.tostring(math.round(pips_gained)) + " p)"
+
+    box.new(trade_start_bar, entry_price, bar_index, exit_price, bgcolor=color.new(c, 85), border_color=na)
+    label.new(bar_index, exit_price, txt, color=c, style=label.style_label_center, textcolor=color.white, size=size.tiny)
+    
+    trade_dir := 0
+    entry_price := na, sl_price := na, tp_price := na
+
+color sl_color = is_trailing ? color.blue : (is_be ? color.gray : color.red)
+plot(trade_dir != 0 ? sl_price : na, "Mức Stop Loss (Động)", color=color.new(sl_color, 30), style=plot.style_linebr, linewidth=2)
+plot(trade_dir != 0 ? tp_price : na, "Mức Chốt Lời", color=color.new(color.green, 30), style=plot.style_linebr, linewidth=2)
+
+// --- E. BẢNG THỐNG KÊ CHI TIẾT ---
+var table stats_table = table.new(position.top_right, 2, 9, border_width = 1, border_color=color.gray)
+if barstate.islast
+    float win_rate = total_trades > 0? (win_trades / total_trades) * 100 : 0
+    
+    table.cell(stats_table, 0, 0, "Tổng Lệnh", bgcolor=color.new(color.gray, 60), text_color=color.white)
+    table.cell(stats_table, 1, 0, str.tostring(total_trades), bgcolor=color.new(color.gray, 80), text_color=color.white)
+    
+    table.cell(stats_table, 0, 1, "Thắng", bgcolor=color.new(color.green, 50), text_color=color.white)
+    table.cell(stats_table, 1, 1, str.tostring(win_trades) + "\n(+" + str.tostring(math.round(total_pips_win)) + " p)", bgcolor=color.new(color.green, 80), text_color=color.white)
+    
+    table.cell(stats_table, 0, 2, "Hòa (BE)", bgcolor=color.new(color.gray, 50), text_color=color.white)
+    table.cell(stats_table, 1, 2, str.tostring(be_trades), bgcolor=color.new(color.gray, 80), text_color=color.white)
+
+    table.cell(stats_table, 0, 3, "Thua", bgcolor=color.new(color.red, 50), text_color=color.white)
+    table.cell(stats_table, 1, 3, str.tostring(loss_trades) + "\n(-" + str.tostring(math.round(total_pips_loss)) + " p)", bgcolor=color.new(color.red, 80), text_color=color.white)
+    
+    table.cell(stats_table, 0, 4, "Tỷ lệ Thắng", bgcolor=color.new(color.blue, 50), text_color=color.white)
+    table.cell(stats_table, 1, 4, str.tostring(win_rate, "#.##") + " %", bgcolor=color.new(color.blue, 80), text_color=color.white)
+
+    string status_txt = trade_dir != 0 ? (trade_dir > 0 ? "LONG" : "SHORT") : (pending_dir != 0 ? "WAIT LIMIT" : "WAIT")
+    color status_col = trade_dir != 0 ? (trade_dir > 0 ? color.green : color.red) : (pending_dir != 0 ? color.orange : color.black)
+    
+    if is_trailing 
+        status_txt += " (TRAIL SL)"
+        status_col := color.blue
+        
+    // Cập nhật Cảnh báo Khóa Giờ
+    if trade_dir == 0 and pending_dir == 0
+        if not is_time_allowed
+            status_txt := "BLOCKED TIME"
+            status_col := color.purple
+        else if use_cooldown
+            if time <= block_long_until and time <= block_short_until
+                status_txt := "LOCKED (ALL)"
+                status_col := color.purple
+            else if time <= block_long_until
+                status_txt := "LOCKED (LONG)"
+                status_col := color.purple
+            else if time <= block_short_until
+                status_txt := "LOCKED (SHORT)"
+                status_col := color.purple
+                
+    // Cập nhật Nhãn Khối Lượng
+    if trade_dir != 0
+        status_txt += " [" + str.tostring(active_trade_vol, "#.##") + " L]"
+
+    table.cell(stats_table, 0, 5, "TRẠNG THÁI", bgcolor=status_col, text_color=color.white)
+    table.cell(stats_table, 1, 5, status_txt, bgcolor=status_col, text_color=color.white)
+
+    table.cell(stats_table, 0, 6, "ENTRY", bgcolor=color.new(color.gray,50), text_color=color.white)
+    table.cell(stats_table, 1, 6, na(entry_price) ? (na(pending_entry) ? "-" : str.tostring(pending_entry, format.mintick)) : str.tostring(entry_price, format.mintick), bgcolor=color.white, text_color=color.black)
+    
+    table.cell(stats_table, 0, 7, is_trailing ? "TRAIL SL" : "STOP LOSS", bgcolor=is_trailing ? color.blue : color.black, text_color=color.white)
+    table.cell(stats_table, 1, 7, na(sl_price) ? (na(pending_sl) ? "-" : str.tostring(pending_sl, format.mintick)) : str.tostring(sl_price, format.mintick), bgcolor=color.white, text_color=color.black)
+    
+    table.cell(stats_table, 0, 8, "TAKE PROFIT", bgcolor=color.new(color.green, 80), text_color=color.white)
+    table.cell(stats_table, 1, 8, na(tp_price) ? (na(pending_tp) ? "-" : str.tostring(pending_tp, format.mintick)) : str.tostring(tp_price, format.mintick), bgcolor=color.white, text_color=color.black)
+
+// ==========================================
+// === PHẦN 3: KẾT NỐI BOT TỰ ĐỘNG (GIỮ NGUYÊN LOGIC WEBHOOK CŨ) ===
+// ==========================================
+bot_pair = input.string("XAUUSD", "Mã giao dịch trên MT5 (Vàng Exness)", group="CÀI ĐẶT BOT TỰ ĐỘNG (EXNESS)")
+bot_id = input.string("123456", "Mã bảo mật Bot", group="CÀI ĐẶT BOT TỰ ĐỘNG (EXNESS)")
+bot_magic = input.int(111111, "Mã Chiến Lược (Magic Number)", group="CÀI ĐẶT BOT TỰ ĐỘNG (EXNESS)") 
+
+// Gửi khối lượng theo Auto Lot hoặc Cố định
+f_json(string act, float v_lot) =>
+    '{"bot_id": "' + bot_id + '", "action": "' + act + '", "pair": "' + bot_pair + '", "volume": ' + str.tostring(v_lot, "#.##") + ', "magic": ' + str.tostring(bot_magic) + '}'
+
+bool just_entered_long = (trade_dir == 1 and nz(trade_dir[1]) == 0)
+bool just_entered_short = (trade_dir == -1 and nz(trade_dir[1]) == 0)
+
+if just_entered_long
+    alert(f_json("long", active_trade_vol), alert.freq_once_per_bar)
+
+if just_entered_short
+    alert(f_json("short", active_trade_vol), alert.freq_once_per_bar)
+
+if is_hit
+    alert(f_json(close_action_str, active_trade_vol), alert.freq_once_per_bar)
