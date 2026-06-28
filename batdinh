@@ -676,11 +676,30 @@ f_json(string act, float v_lot) =>
 bool just_entered_long = (trade_dir == 1 and nz(trade_dir[1]) == 0)
 bool just_entered_short = (trade_dir == -1 and nz(trade_dir[1]) == 0)
 
-if just_entered_long
-    alert(f_json("long", active_trade_vol), alert.freq_once_per_bar)
+// === CƠ CHẾ ALERT SỬA LỖI: DÙNG varip + freq_all ===
+// varip giữ trạng thái cờ qua từng tick trong nến real-time
+// freq_all đảm bảo alert được gửi ngay khi điều kiện đúng
+// Cờ chỉ reset khi sự kiện kết thúc → tránh gửi trùng lặp
+varip bool _alerted_long = false
+varip bool _alerted_short = false
+varip bool _alerted_close = false
 
-if just_entered_short
-    alert(f_json("short", active_trade_vol), alert.freq_once_per_bar)
+// Reset cờ khi không còn ở trạng thái tương ứng
+if trade_dir != 1
+    _alerted_long := false
+if trade_dir != -1
+    _alerted_short := false
+if not is_hit
+    _alerted_close := false
 
-if is_hit
-    alert(f_json(close_action_str, active_trade_vol), alert.freq_once_per_bar)
+if just_entered_long and not _alerted_long
+    _alerted_long := true
+    alert(f_json("long", active_trade_vol), alert.freq_all)
+
+if just_entered_short and not _alerted_short
+    _alerted_short := true
+    alert(f_json("short", active_trade_vol), alert.freq_all)
+
+if is_hit and not _alerted_close
+    _alerted_close := true
+    alert(f_json(close_action_str, active_trade_vol), alert.freq_all)
