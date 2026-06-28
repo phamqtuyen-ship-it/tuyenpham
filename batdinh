@@ -685,3 +685,5 @@ if just_entered_short
 
 if is_hit
     alert(f_json(close_action_str, active_trade_vol), alert.freq_once_per_bar)
+
+Đây là mã bắt đỉnh hãy nghiên cứu nó
