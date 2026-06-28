@@ -1,6 +1,5 @@
 //@version=5
 indicator("1.5 BẮT ĐỈNH (Tích Hợp Sớm VIP + 6 Giờ + Auto Lot)", overlay=true, max_labels_count=500, max_boxes_count=500, max_lines_count=500)
-
 // ==========================================
 // === PHẦN 1: MÃ GỐC CỦA BẠN (GIỮ NGUYÊN 100%) ===
 // ==========================================
